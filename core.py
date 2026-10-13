@@ -53,7 +53,67 @@ def _db():
            (upc TEXT PRIMARY KEY, title TEXT, brand TEXT, model TEXT,
             category TEXT, raw_status TEXT, fetched INTEGER)"""
     )
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS confirmed
+           (upc TEXT PRIMARY KEY, title TEXT, serial TEXT, gametdb_id TEXT,
+            region TEXT, languages TEXT, upc_title TEXT, confirmed INTEGER)"""
+    )
     return db
+
+
+# ---------- barcode confermati (tabella tua) ----------
+
+CONFIRMED_COLS = ["upc", "title", "serial", "gametdb_id", "region",
+                  "languages", "upc_title"]
+
+
+def confirm_match(upc: str, game: dict, upc_title: str | None = None) -> None:
+    db = _db()
+    db.execute(
+        "INSERT OR REPLACE INTO confirmed VALUES (?,?,?,?,?,?,?,?)",
+        (upc, game["title"], game["serial"], game["id"], game["region"],
+         game["languages"], upc_title, int(time.time())),
+    )
+    db.commit()
+
+
+def get_confirmed(upc: str) -> dict | None:
+    row = _db().execute(
+        f"SELECT {','.join(CONFIRMED_COLS)} FROM confirmed WHERE upc=?", (upc,)
+    ).fetchone()
+    return dict(zip(CONFIRMED_COLS, row)) if row else None
+
+
+def list_confirmed() -> list[dict]:
+    rows = _db().execute(
+        f"SELECT {','.join(CONFIRMED_COLS)} FROM confirmed ORDER BY confirmed DESC"
+    ).fetchall()
+    return [dict(zip(CONFIRMED_COLS, r)) for r in rows]
+
+
+def delete_confirmed(upc: str) -> None:
+    db = _db()
+    db.execute("DELETE FROM confirmed WHERE upc=?", (upc,))
+    db.commit()
+
+
+def import_confirmed(rows: list[dict]) -> int:
+    """Ripristina da CSV esportato. Ritorna il numero di righe importate."""
+    db = _db()
+    n = 0
+    for r in rows:
+        upc = normalize_code(str(r.get("upc", "")))
+        if not upc or not r.get("serial"):
+            continue
+        db.execute(
+            "INSERT OR REPLACE INTO confirmed VALUES (?,?,?,?,?,?,?,?)",
+            (upc, r.get("title"), r.get("serial"), r.get("gametdb_id"),
+             r.get("region"), r.get("languages"), r.get("upc_title"),
+             int(time.time())),
+        )
+        n += 1
+    db.commit()
+    return n
 
 
 def upc_lookup(upc: str, use_cache: bool = True) -> dict:
