@@ -214,7 +214,7 @@ def _scandex_lookup(upc: str, api_key: str | None) -> dict:
     if r.status_code == 429:
         return {"status": "troppe richieste a ScanDex (429)", **empty}
     if r.status_code != 200:
-        return {"status": f"errore HTTP {r.status_code}", **empty}
+        return {"status": _http_err(r, api_key), **empty}
     j = r.json()
     meta = j.get("igdb_metadata")
     if not meta:
@@ -230,6 +230,17 @@ PROVIDERS = {"retroplace": "Retroplace (chiave API venditore, dà anche il produ
              "ebay": "eBay Browse API (chiavi sviluppatore gratuite)",
              "barcodelookup": "Barcode Lookup (serve chiave API)",
              "upcitemdb": "UPCitemdb (gratuito, con limite giornaliero)"}
+
+
+HEADERS = {"User-Agent": "upc-game-lookup/1.0 (personal Streamlit app)"}
+
+
+def _http_err(r, api_key=None) -> str:
+    """Messaggio d'errore HTTP con un frammento della risposta, senza chiavi."""
+    txt = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text or "")).strip()[:160]
+    for secret in filter(None, [api_key] + (api_key or "").split(":")):
+        txt = txt.replace(secret, "***")
+    return f"errore HTTP {r.status_code}" + (f": {txt}" if txt else "")
 
 
 def _unpack_alt(raw) -> dict:
@@ -252,9 +263,10 @@ def _retroplace_lookup(upc: str, api_key: str | None) -> dict:
     url = RETROPLACE_URL.format(key=quote(api_key, safe=""))
     rels, msg = [], ""
     for code in dict.fromkeys([upc] + (["0" + upc] if len(upc) == 12 else [])):
-        r = requests.get(url, params={"barcode": code}, timeout=15)
+        r = requests.get(url, params={"barcode": code}, headers=HEADERS,
+                         timeout=15)
         if r.status_code != 200:
-            return {"status": f"errore HTTP {r.status_code}", **empty}
+            return {"status": _http_err(r, api_key), **empty}
         try:
             j = r.json()
         except ValueError:
@@ -311,7 +323,7 @@ def _fetch_provider(upc: str, provider: str, api_key: str | None,
             if r.status_code == 429:
                 return {"status": "troppe richieste (429)", **empty}
             if r.status_code != 200:
-                return {"status": f"errore HTTP {r.status_code}", **empty}
+                return {"status": _http_err(r, api_key), **empty}
             items = r.json().get("products") or []
             if not items:
                 return {"status": "non trovato", **empty}
@@ -321,11 +333,12 @@ def _fetch_provider(upc: str, provider: str, api_key: str | None,
                     "model": it.get("model") or it.get("mpn"),
                     "category": it.get("category")}
         # upcitemdb
-        r = requests.get(UPCITEMDB_URL, params={"upc": upc}, timeout=15)
+        r = requests.get(UPCITEMDB_URL, params={"upc": upc}, headers=HEADERS,
+                         timeout=15)
         if r.status_code == 429:
             return {"status": "limite giornaliero UPCitemdb raggiunto (429)", **empty}
         if r.status_code != 200:
-            return {"status": f"errore HTTP {r.status_code}", **empty}
+            return {"status": _http_err(r, api_key), **empty}
         items = r.json().get("items") or []
         if not items:
             return {"status": "non trovato", **empty}
