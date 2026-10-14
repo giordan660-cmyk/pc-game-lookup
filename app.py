@@ -5,7 +5,7 @@ import core
 
 st.set_page_config(page_title="UPC → dati videogioco", page_icon="🎮", layout="wide")
 st.title("🎮 Da barcode UPC/EAN a dati del videogioco")
-st.caption("UPCitemdb per il titolo, GameTDB per seriale, regione e lingue. "
+st.caption("Barcode Lookup o UPCitemdb per il titolo, GameTDB per seriale, regione e lingue. "
            "Filtri predefiniti: PAL + italiano.")
 
 # ---------- barra laterale: GameTDB e filtri ----------
@@ -31,6 +31,53 @@ with st.sidebar:
             st.success(f"{len(games)} titoli caricati")
         except Exception as e:
             st.error(f"File non leggibile: {e}")
+
+    st.header("Fonte barcode")
+    provider = st.selectbox("Servizio", list(core.PROVIDERS),
+                            format_func=lambda k: core.PROVIDERS[k])
+    api_key = None
+    markets = None
+    if provider == "retroplace":
+        try:
+            rk0 = st.secrets.get("RETROPLACE_KEY")
+        except Exception:
+            rk0 = None
+        api_key = st.text_input("Chiave API Retroplace", value=rk0 or "",
+                                type="password") or None
+        st.caption("Si trova nelle impostazioni venditore del tuo account Retroplace. "
+                   "Oppure nei Secrets come RETROPLACE_KEY.")
+    if provider == "scandex":
+        try:
+            tok0 = st.secrets.get("SCANDEX_TOKEN")
+        except Exception:
+            tok0 = None
+        api_key = st.text_input("Token API ScanDex", value=tok0 or "",
+                                type="password") or None
+        st.caption("Crealo gratis su scandex.gamery.app (Account). "
+                   "Oppure nei Secrets come SCANDEX_TOKEN.")
+    if provider == "ebay":
+        try:
+            cid0 = st.secrets.get("EBAY_CLIENT_ID")
+            sec0 = st.secrets.get("EBAY_CLIENT_SECRET")
+        except Exception:
+            cid0 = sec0 = None
+        cid = st.text_input("eBay Client ID (App ID)", value=cid0 or "")
+        sec = st.text_input("eBay Client Secret (Cert ID)", value=sec0 or "",
+                            type="password")
+        api_key = f"{cid}:{sec}" if cid and sec else None
+        markets = st.multiselect("Mercati eBay da cercare",
+                                 list(core.EBAY_MARKETS),
+                                 default=list(core.EBAY_MARKETS),
+                                 format_func=lambda k: core.EBAY_MARKETS[k])
+        st.caption("Oppure nei Secrets: EBAY_CLIENT_ID e EBAY_CLIENT_SECRET.")
+    if provider == "barcodelookup":
+        try:
+            api_key = st.secrets.get("BARCODELOOKUP_KEY")
+        except Exception:
+            api_key = None
+        api_key = st.text_input("Chiave API Barcode Lookup", value=api_key or "",
+                                type="password") or None
+        st.caption("Oppure salvala nei Secrets dell'app come BARCODELOOKUP_KEY.")
 
     st.header("Filtri")
     regions = sorted({g["region"] for g in games if g["region"]})
@@ -76,21 +123,50 @@ with tab_search:
 
     if st.button("Cerca" if not saved else "Cerca di nuovo", type="primary",
                  disabled=not ok):
-        with st.spinner("Interrogo UPCitemdb…"):
-            st.session_state["upc_res"] = core.upc_lookup(code)
+        with st.spinner("Interrogo il servizio barcode…"):
+            st.session_state["upc_res"] = core.upc_lookup(code, provider, api_key, markets=markets)
             st.session_state["upc_code"] = code
     if not ok:
         st.warning("Cifra di controllo errata: controlla il codice.")
 
     res = st.session_state.get("upc_res")
     if res and st.session_state.get("upc_code") == code:
-        st.header("2. Risultato UPCitemdb")
+        st.header("2. Risultato del servizio barcode")
         if res["status"] != "ok":
             st.warning(f"Esito: {res['status']}")
         else:
             st.write({k: res.get(k) for k in ("title", "brand", "model", "category")})
             if res.get("from_cache"):
                 st.caption("(dal cache locale)")
+
+        if res.get("alternatives"):
+            st.caption("Altri titoli trovati negli annunci: "
+                       + " · ".join(res["alternatives"]))
+
+        rels = res.get("releases") or []
+        if rels:
+            st.subheader("Edizioni trovate su Retroplace")
+            st.dataframe(pd.DataFrame(rels)[["title", "system", "productid",
+                                             "region", "rp_id"]].rename(columns={
+                "title": "Titolo", "system": "Sistema", "productid": "Product ID",
+                "region": "Regioni", "rp_id": "ID Retroplace"}),
+                use_container_width=True, hide_index=True)
+            rlabels = [f"{d['title']} · {d['system']} · {d['productid'] or 'senza ID'}"
+                       f" · {d['region']}" for d in rels]
+            rpick = st.selectbox("Edizione giusta", range(len(rels)),
+                                 format_func=lambda i: rlabels[i], key="rp_pick")
+            if st.button("✅ Salva questa edizione (da Retroplace)",
+                         disabled=not rels[rpick]["productid"]):
+                d = rels[rpick]
+                core.confirm_match(code, {"title": d["title"],
+                                          "serial": d["productid"],
+                                          "id": str(d["rp_id"]),
+                                          "region": d["region"],
+                                          "languages": ""}, res.get("title"))
+                st.success("Salvato.")
+                st.rerun()
+            st.caption("Il Product ID è quello indicato da Retroplace, senza passare "
+                       "da GameTDB. Il pulsante resta disattivo se manca.")
 
         st.header("3. Abbinamento con GameTDB")
         query = st.text_input("Titolo da cercare (modificabile)",
